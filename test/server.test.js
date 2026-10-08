@@ -36,6 +36,38 @@ test('API lists rooms, creates a booking, and retrieves it', async (t) => {
   assert.deepEqual(await listed.json(), [result]);
 });
 
+test('a conflicting booking returns 409 with the error+conflict payload shape', async (t) => {
+  const request = await setup(t);
+  const created = await request('/api/bookings', post(booking));
+  const existing = await created.json();
+  const response = await request('/api/bookings', post({ ...booking, startTime: '2030-06-12T09:30:00Z', endTime: '2030-06-12T10:30:00Z' }));
+  assert.equal(response.status, 409);
+  const body = await response.json();
+  assert.match(body.error, /Cedar is already booked from/);
+  assert.deepEqual(body.conflict, { id: existing.id, startTime: existing.startTime, endTime: existing.endTime });
+  assert.equal(body.title, undefined);
+  assert.equal(body.organizer, undefined);
+});
+
+test('after a 409, a subsequent non-overlapping booking for the same room still returns 201', async (t) => {
+  const request = await setup(t);
+  await request('/api/bookings', post(booking));
+  const conflicting = await request('/api/bookings', post(booking));
+  assert.equal(conflicting.status, 409);
+  const next = await request('/api/bookings', post({ ...booking, startTime: '2030-06-12T10:00:00Z', endTime: '2030-06-12T11:00:00Z' }));
+  assert.equal(next.status, 201);
+  const listed = await request('/api/bookings?roomId=cedar&date=2030-06-12');
+  assert.equal((await listed.json()).length, 2);
+});
+
+test('overlapping bookings for different rooms both succeed', async (t) => {
+  const request = await setup(t);
+  const first = await request('/api/bookings', post(booking));
+  const second = await request('/api/bookings', post({ ...booking, roomId: 'maple' }));
+  assert.equal(first.status, 201);
+  assert.equal(second.status, 201);
+});
+
 test('API returns useful validation errors and does not create invalid bookings', async (t) => {
   const request = await setup(t);
   const response = await request('/api/bookings', post({ ...booking, endTime: booking.startTime }));
